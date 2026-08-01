@@ -1,11 +1,14 @@
 repeat task.wait() until game:IsLoaded()
 
 local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
 local UserInputService = game:GetService("UserInputService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local player = Players.LocalPlayer
 local character = player.Character or player.CharacterAdded:Wait()
+
+local CONFIG_FILE = "BossTracker_Settings.json"
 
 local config = {
     autoTpEnabled = false,
@@ -24,6 +27,30 @@ local allowedBosses = {
     "BattleBot", "MechGolem", "TheGreatWitch", "Anubis",
     "GlitchBoss", "WaterBoss"
 }
+
+-- SAVE / LOAD SYSTEM
+local function saveConfig()
+    if writefile then
+        pcall(function() writefile(CONFIG_FILE, HttpService:JSONEncode(config)) end)
+    end
+end
+
+local function loadConfig()
+    if readfile and isfile and isfile(CONFIG_FILE) then
+        local success, rawData = pcall(function() return readfile(CONFIG_FILE) end)
+        if success and rawData then
+            local decSuccess, result = pcall(function() return HttpService:JSONDecode(rawData) end)
+            if decSuccess and type(result) == "table" then
+                if result.autoTpEnabled ~= nil then config.autoTpEnabled = result.autoTpEnabled end
+                if result.bossToggles ~= nil then
+                    for k, v in pairs(result.bossToggles) do config.bossToggles[k] = v end
+                end
+            end
+        end
+    end
+end
+
+loadConfig()
 
 local SAFE_OFFSET = CFrame.new(0, 3, 10)
 local loopDelay = 0.3
@@ -135,6 +162,7 @@ toggleBtn.MouseButton1Click:Connect(function()
     config.autoTpEnabled = not config.autoTpEnabled
     toggleBtn.Text = config.autoTpEnabled and "Auto TP: ON" or "Auto TP: OFF"
     toggleBtn.BackgroundColor3 = config.autoTpEnabled and Color3.fromRGB(0, 170, 0) or Color3.fromRGB(170, 0, 0)
+    saveConfig()
 end)
 
 local scrollFrame = Instance.new("ScrollingFrame")
@@ -176,6 +204,7 @@ for idx, bossName in ipairs(allowedBosses) do
         local updatedState = config.bossToggles[bossName]
         bossBtn.Text = bossName .. " : " .. (updatedState and "ON" or "OFF")
         bossBtn.BackgroundColor3 = updatedState and Color3.fromRGB(0, 140, 0) or Color3.fromRGB(140, 0, 0)
+        saveConfig()
     end)
 end
 
@@ -275,4 +304,4 @@ player.CharacterAdded:Connect(function(newChar)
     character = newChar
 end)
 
-print("[Loaded] Clean Boss Auto-Farm running.")
+print("[Loaded] Boss Auto-Farm with setting auto-save enabled.")
