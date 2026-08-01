@@ -1,0 +1,633 @@
+repeat task.wait() until game:IsLoaded()
+
+local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
+local UserInputService = game:GetService("UserInputService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+
+local JOB_ID = game.JobId
+local CONFIG_FILE = "BossTracker_Config.json"
+
+-- DEFAULT CONFIGURATION
+local config = {
+    webhookUrl = "",
+    bossRoleId = "1532431160897044701",
+    merchantRoleId = "1532431360176951416",
+    autoTpEnabled = false,
+    bossToggles = {
+        ["EarthBoss"] = true, ["FreezeBoss"] = true, ["LavaGolem"] = true,
+        ["MushroomGolem"] = true, ["CrystalGolem"] = true, ["Agrynoth"] = true,
+        ["Boss1"] = true, ["Boss2"] = true, ["BattleBot"] = true,
+        ["MechGolem"] = true, ["TheGreatWitch"] = true, ["Anubis"] = true,
+        ["GlitchBoss"] = true, ["WaterBoss"] = true
+    }
+}
+
+local allowedBosses = {
+    "EarthBoss", "FreezeBoss", "LavaGolem", "MushroomGolem",
+    "CrystalGolem", "Agrynoth", "Boss1", "Boss2",
+    "BattleBot", "MechGolem", "TheGreatWitch", "Anubis",
+    "GlitchBoss", "WaterBoss"
+}
+
+local SAFE_OFFSET = CFrame.new(0, 3, 10)
+local loopDelay = 0.3
+
+local totalKills = 0
+local trackedBosses = {}
+local previousGold = nil
+local totalGoldGainedFromBosses = 0
+local previousGems = nil
+local totalGemsGainedFromBosses = 0
+
+-- Helper function to get current time in 12-hour format with AM/PM
+local function get12HourTime()
+    return os.date("%I:%M:%S %p")
+end
+
+local function parseFormattedValue(val)
+    if not val or val == "N/A" then return nil end
+    if type(val) == "number" then return val end
+    local str = tostring(val):gsub(",", ""):gsub("%s+", ""):upper()
+    local numStr = str:match("[%d%.]+")
+    if not numStr then return nil end
+    local num = tonumber(numStr)
+    if not num then return nil end
+    if str:find("B") then num = num * 1000000000
+    elseif str:find("M") then num = num * 1000000
+    elseif str:find("K") then num = num * 1000 end
+    return num
+end
+
+local function getCurrentGemsNumber()
+    local leaderstats = player:FindFirstChild("leaderstats")
+    if leaderstats then
+        local gemsObj = leaderstats:FindFirstChild("Gems") or leaderstats:FindFirstChild("Gem")
+        if gemsObj and gemsObj:IsA("ValueBase") then return gemsObj.Value end
+    end
+    local directGems = player:FindFirstChild("Gems") or player:FindFirstChild("Gem")
+    if directGems and directGems:IsA("ValueBase") then return directGems.Value end
+
+    local playerGui = player:FindFirstChild("PlayerGui")
+    if playerGui then
+        local mainGui = playerGui:FindFirstChild("Main")
+        if mainGui and mainGui:FindFirstChild("Frame") and mainGui.Frame:FindFirstChild("GemsFrame") then
+            local gemsFrame = mainGui.Frame.GemsFrame
+            local textObj = gemsFrame:IsA("TextLabel") and gemsFrame or gemsFrame:FindFirstChildOfClass("TextLabel")
+            if textObj and textObj.Text ~= "" then return parseFormattedValue(textObj.Text) end
+        end
+    end
+    return nil
+end
+
+local function getCurrentGoldNumber()
+    local leaderstats = player:FindFirstChild("leaderstats")
+    if leaderstats then
+        local goldObj = leaderstats:FindFirstChild("Gold")
+        if goldObj and goldObj:IsA("ValueBase") then return goldObj.Value end
+    end
+    local directGold = player:FindFirstChild("Gold")
+    if directGold and directGold:IsA("ValueBase") then return directGold.Value end
+
+    local playerGui = player:FindFirstChild("PlayerGui")
+    if playerGui then
+        local mainGui = playerGui:FindFirstChild("Main")
+        if mainGui and mainGui:FindFirstChild("Frame") and mainGui.Frame:FindFirstChild("GoldFrame") then
+            local goldFrame = mainGui.Frame.GoldFrame
+            local textObj = goldFrame:IsA("TextLabel") and goldFrame or goldFrame:FindFirstChildOfClass("TextLabel")
+            if textObj and textObj.Text ~= "" then return parseFormattedValue(textObj.Text) end
+        end
+    end
+    return nil
+end
+
+-- CONFIG SYSTEM (SAVE / LOAD)
+local function saveConfig()
+    if writefile then
+        pcall(function() writefile(CONFIG_FILE, HttpService:JSONEncode(config)) end)
+    end
+end
+
+local function loadConfig()
+    if readfile and isfile and isfile(CONFIG_FILE) then
+        local success, rawData = pcall(function() return readfile(CONFIG_FILE) end)
+        if success and rawData then
+            local decSuccess, result = pcall(function() return HttpService:JSONDecode(rawData) end)
+            if decSuccess and type(result) == "table" then
+                if result.webhookUrl ~= nil then config.webhookUrl = result.webhookUrl end
+                if result.bossRoleId ~= nil then config.bossRoleId = result.bossRoleId end
+                if result.merchantRoleId ~= nil then config.merchantRoleId = result.merchantRoleId end
+                if result.autoTpEnabled ~= nil then config.autoTpEnabled = result.autoTpEnabled end
+                if result.bossToggles ~= nil then
+                    for k, v in pairs(result.bossToggles) do config.bossToggles[k] = v end
+                end
+            end
+        end
+    end
+end
+
+loadConfig()
+
+-- SEPARATE WEBHOOK: MERCHANT SPAWNED
+local function sendMerchantWebhookNotification()
+    if not config.webhookUrl or config.webhookUrl == "" then
+        warn("[Merchant Check] Cannot send webhook: Webhook URL is empty!")
+        return
+    end
+
+    local pingText = (config.merchantRoleId and config.merchantRoleId ~= "") and ("<@&" .. config.merchantRoleId .. ">") or "@here"
+
+    local embedData = {
+        ["title"] = "🛒 Merchant Spawned!",
+        ["description"] = "A Traveling Merchant (Dummy) has spawned in the server!",
+        ["color"] = 16753920,
+        ["fields"] = {
+            { ["name"] = "👤 Player In Server", ["value"] = player.Name, ["inline"] = true },
+            { ["name"] = "🌐 Server JobID", ["value"] = "```" .. JOB_ID .. "```", ["inline"] = false }
+        },
+        ["footer"] = { ["text"] = "Merchant Checker • " .. get12HourTime() }
+    }
+
+    local requestBody = HttpService:JSONEncode({
+        ["username"] = "Merchant Checker",
+        ["content"] = pingText .. " 🛒 **Merchant Spawned!**",
+        ["embeds"] = { embedData }
+    })
+
+    local httpRequest = (syn and syn.request) or (http and http.request) or http_request or request
+    if httpRequest then
+        local success, err = pcall(function()
+            httpRequest({
+                Url = config.webhookUrl,
+                Method = "POST",
+                Headers = { ["Content-Type"] = "application/json" },
+                Body = requestBody
+            })
+        end)
+        if success then
+            print("[Merchant Check] Webhook successfully sent to Discord!")
+        else
+            warn("[Merchant Check] Webhook failed to send:", err)
+        end
+    else
+        warn("[Merchant Check] No HTTP request function found in executor!")
+    end
+end
+
+-- SEPARATE WEBHOOK: BOSS KILLED
+local function sendBossWebhookNotification(bossName, customMessage)
+    if not config.webhookUrl or config.webhookUrl == "" then return end
+
+    local currentGoldNum = getCurrentGoldNumber()
+    local currentGemsNum = getCurrentGemsNumber()
+
+    if previousGold == nil and currentGoldNum then previousGold = currentGoldNum end
+    if previousGems == nil and currentGemsNum then previousGems = currentGemsNum end
+
+    if not customMessage then
+        if currentGoldNum and previousGold then
+            local goldGainedLastKill = math.max(0, currentGoldNum - previousGold)
+            totalGoldGainedFromBosses = totalGoldGainedFromBosses + goldGainedLastKill
+            previousGold = currentGoldNum
+        end
+        if currentGemsNum and previousGems then
+            local gemsGainedLastKill = math.max(0, currentGemsNum - previousGems)
+            totalGemsGainedFromBosses = totalGemsGainedFromBosses + gemsGainedLastKill
+            previousGems = currentGemsNum
+        end
+    end
+
+    local pingText = (config.bossRoleId and config.bossRoleId ~= "") and ("<@&" .. config.bossRoleId .. ">") or ""
+    local messageContent = customMessage and "⚙️ **Webhook Connected**" or (pingText .. " ⚔️ **Boss Defeated!**")
+
+    local embedData = {
+        ["title"] = customMessage and "⚙️ Webhook Connected" or "⚔️ Boss Defeated!",
+        ["color"] = customMessage and 3447003 or 65280,
+        ["fields"] = {
+            { ["name"] = "👤 Player", ["value"] = player.Name, ["inline"] = true },
+            { ["name"] = "👹 Last Killed", ["value"] = customMessage or bossName, ["inline"] = true },
+            { ["name"] = "💰 Total Gold Gained", ["value"] = customMessage and "N/A" or "+" .. tostring(totalGoldGainedFromBosses), ["inline"] = true },
+            { ["name"] = "💎 Total Gems Gained", ["value"] = customMessage and "N/A" or "+" .. tostring(totalGemsGainedFromBosses), ["inline"] = true },
+            { ["name"] = "🪙 Current Gold", ["value"] = currentGoldNum and tostring(currentGoldNum) or "N/A", ["inline"] = true },
+            { ["name"] = "📊 Total Kills", ["value"] = tostring(totalKills), ["inline"] = true }
+        },
+        ["footer"] = { ["text"] = "Boss Kill Tracker • " .. get12HourTime() }
+    }
+
+    local requestBody = HttpService:JSONEncode({
+        ["username"] = "Boss Kill Tracker",
+        ["content"] = messageContent,
+        ["embeds"] = { embedData }
+    })
+
+    local httpRequest = (syn and syn.request) or (http and http.request) or http_request or request
+    if httpRequest then
+        httpRequest({
+            Url = config.webhookUrl,
+            Method = "POST",
+            Headers = { ["Content-Type"] = "application/json" },
+            Body = requestBody
+        })
+    end
+end
+
+-- GUI Setup
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "BossTrackerGUI"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = player:WaitForChild("PlayerGui")
+
+local mainContainer = Instance.new("Frame")
+mainContainer.Size = UDim2.new(0, 250, 0, 430)
+mainContainer.Position = UDim2.new(0.05, 0, 0.2, 0)
+mainContainer.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+mainContainer.Active = true
+mainContainer.Visible = true
+mainContainer.Parent = screenGui
+
+local mainCorner = Instance.new("UICorner")
+mainCorner.CornerRadius = UDim.new(0, 10)
+mainCorner.Parent = mainContainer
+
+local openBtn = Instance.new("TextButton")
+openBtn.Size = UDim2.new(0, 40, 0, 40)
+openBtn.Position = UDim2.new(0.05, 0, 0.2, 0)
+openBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+openBtn.Text = "＋"
+openBtn.TextColor3 = Color3.fromRGB(0, 255, 150)
+openBtn.TextSize = 20
+openBtn.Font = Enum.Font.SourceSansBold
+openBtn.Visible = false
+openBtn.Active = true
+openBtn.Parent = screenGui
+
+local openCorner = Instance.new("UICorner")
+openCorner.CornerRadius = UDim.new(0, 10)
+openCorner.Parent = openBtn
+
+local minimizeBtn = Instance.new("TextButton")
+minimizeBtn.Size = UDim2.new(0, 25, 0, 25)
+minimizeBtn.Position = UDim2.new(1, -30, 0, 5)
+minimizeBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+minimizeBtn.Text = "－"
+minimizeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+minimizeBtn.TextSize = 16
+minimizeBtn.Font = Enum.Font.SourceSansBold
+minimizeBtn.ZIndex = 5
+minimizeBtn.Parent = mainContainer
+
+local minCorner = Instance.new("UICorner")
+minCorner.CornerRadius = UDim.new(0, 6)
+minCorner.Parent = minimizeBtn
+
+minimizeBtn.MouseButton1Click:Connect(function()
+    openBtn.Position = mainContainer.Position
+    mainContainer.Visible = false
+    openBtn.Visible = true
+end)
+
+openBtn.MouseButton1Click:Connect(function()
+    mainContainer.Position = openBtn.Position
+    openBtn.Visible = false
+    mainContainer.Visible = true
+end)
+
+local function enableDragging(frame)
+    local dragging, dragInput, dragStart, startPos
+    local function updateInput(input)
+        local delta = input.Position - dragStart
+        frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+    frame.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = frame.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then dragging = false end
+            end)
+        end
+    end)
+    frame.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            dragInput = input
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then updateInput(input) end
+    end)
+end
+enableDragging(mainContainer)
+enableDragging(openBtn)
+
+local toggleBtn = Instance.new("TextButton")
+toggleBtn.Size = UDim2.new(0, 200, 0, 35)
+toggleBtn.Position = UDim2.new(0, 10, 0, 10)
+toggleBtn.BackgroundColor3 = config.autoTpEnabled and Color3.fromRGB(0, 170, 0) or Color3.fromRGB(170, 0, 0)
+toggleBtn.Text = config.autoTpEnabled and "Auto TP: ON" or "Auto TP: OFF"
+toggleBtn.TextColor3 = Color3.new(1, 1, 1)
+toggleBtn.TextSize = 14
+toggleBtn.Font = Enum.Font.SourceSansBold
+toggleBtn.Parent = mainContainer
+
+local btnCorner = Instance.new("UICorner")
+btnCorner.CornerRadius = UDim.new(0, 6)
+btnCorner.Parent = toggleBtn
+
+toggleBtn.MouseButton1Click:Connect(function()
+    config.autoTpEnabled = not config.autoTpEnabled
+    toggleBtn.Text = config.autoTpEnabled and "Auto TP: ON" or "Auto TP: OFF"
+    toggleBtn.BackgroundColor3 = config.autoTpEnabled and Color3.fromRGB(0, 170, 0) or Color3.fromRGB(170, 0, 0)
+    saveConfig()
+end)
+
+local scrollFrame = Instance.new("ScrollingFrame")
+scrollFrame.Size = UDim2.new(0, 230, 0, 180)
+scrollFrame.Position = UDim2.new(0, 10, 0, 55)
+scrollFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+scrollFrame.CanvasSize = UDim2.new(0, 0, 0, #allowedBosses * 35 + 5)
+scrollFrame.ScrollBarThickness = 6
+scrollFrame.Parent = mainContainer
+
+local scrollCorner = Instance.new("UICorner")
+scrollCorner.CornerRadius = UDim.new(0, 6)
+scrollCorner.Parent = scrollFrame
+
+local UIListLayout = Instance.new("UIListLayout")
+UIListLayout.Padding = UDim.new(0, 5)
+UIListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+UIListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+UIListLayout.Parent = scrollFrame
+
+for idx, bossName in ipairs(allowedBosses) do
+    local isBossOn = config.bossToggles[bossName] ~= false
+    local bossBtn = Instance.new("TextButton")
+    bossBtn.Size = UDim2.new(0, 210, 0, 30)
+    bossBtn.LayoutOrder = idx
+    bossBtn.BackgroundColor3 = isBossOn and Color3.fromRGB(0, 140, 0) or Color3.fromRGB(140, 0, 0)
+    bossBtn.Text = bossName .. " : " .. (isBossOn and "ON" or "OFF")
+    bossBtn.TextColor3 = Color3.new(1, 1, 1)
+    bossBtn.TextSize = 12
+    bossBtn.Font = Enum.Font.SourceSansBold
+    bossBtn.Parent = scrollFrame
+
+    local bCorner = Instance.new("UICorner")
+    bCorner.CornerRadius = UDim.new(0, 4)
+    bCorner.Parent = bossBtn
+
+    bossBtn.MouseButton1Click:Connect(function()
+        config.bossToggles[bossName] = not config.bossToggles[bossName]
+        local updatedState = config.bossToggles[bossName]
+        bossBtn.Text = bossName .. " : " .. (updatedState and "ON" or "OFF")
+        bossBtn.BackgroundColor3 = updatedState and Color3.fromRGB(0, 140, 0) or Color3.fromRGB(140, 0, 0)
+        saveConfig()
+    end)
+end
+
+local webhookInput = Instance.new("TextBox")
+webhookInput.Size = UDim2.new(0, 230, 0, 30)
+webhookInput.Position = UDim2.new(0, 10, 0, 245)
+webhookInput.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+webhookInput.Text = config.webhookUrl or ""
+webhookInput.PlaceholderText = "Paste Webhook URL Here"
+webhookInput.TextColor3 = Color3.new(1, 1, 1)
+webhookInput.TextSize = 11
+webhookInput.Font = Enum.Font.SourceSans
+webhookInput.ClearTextOnFocus = false
+webhookInput.Parent = mainContainer
+
+local inputCorner = Instance.new("UICorner")
+inputCorner.CornerRadius = UDim.new(0, 6)
+inputCorner.Parent = webhookInput
+
+local bossRoleInput = Instance.new("TextBox")
+bossRoleInput.Size = UDim2.new(0, 230, 0, 30)
+bossRoleInput.Position = UDim2.new(0, 10, 0, 280)
+bossRoleInput.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+bossRoleInput.Text = config.bossRoleId or ""
+bossRoleInput.PlaceholderText = "Boss Role ID"
+bossRoleInput.TextColor3 = Color3.new(1, 1, 1)
+bossRoleInput.TextSize = 11
+bossRoleInput.Font = Enum.Font.SourceSans
+bossRoleInput.ClearTextOnFocus = false
+bossRoleInput.Parent = mainContainer
+
+local bossRoleCorner = Instance.new("UICorner")
+bossRoleCorner.CornerRadius = UDim.new(0, 6)
+bossRoleCorner.Parent = bossRoleInput
+
+local merchantRoleInput = Instance.new("TextBox")
+merchantRoleInput.Size = UDim2.new(0, 230, 0, 30)
+merchantRoleInput.Position = UDim2.new(0, 10, 0, 315)
+merchantRoleInput.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+merchantRoleInput.Text = config.merchantRoleId or ""
+merchantRoleInput.PlaceholderText = "Merchant Role ID"
+merchantRoleInput.TextColor3 = Color3.new(1, 1, 1)
+merchantRoleInput.TextSize = 11
+merchantRoleInput.Font = Enum.Font.SourceSans
+merchantRoleInput.ClearTextOnFocus = false
+merchantRoleInput.Parent = mainContainer
+
+local merchantRoleCorner = Instance.new("UICorner")
+merchantRoleCorner.CornerRadius = UDim.new(0, 6)
+merchantRoleCorner.Parent = merchantRoleInput
+
+local saveWebhookBtn = Instance.new("TextButton")
+saveWebhookBtn.Size = UDim2.new(0, 230, 0, 35)
+saveWebhookBtn.Position = UDim2.new(0, 10, 0, 355)
+saveWebhookBtn.BackgroundColor3 = Color3.fromRGB(50, 100, 200)
+saveWebhookBtn.Text = "Save Webhook & Role Settings"
+saveWebhookBtn.TextColor3 = Color3.new(1, 1, 1)
+saveWebhookBtn.TextSize = 12
+saveWebhookBtn.Font = Enum.Font.SourceSansBold
+saveWebhookBtn.Parent = mainContainer
+
+local saveCorner = Instance.new("UICorner")
+saveCorner.CornerRadius = UDim.new(0, 6)
+saveCorner.Parent = saveWebhookBtn
+
+saveWebhookBtn.MouseButton1Click:Connect(function()
+    config.webhookUrl = webhookInput.Text
+    config.bossRoleId = bossRoleInput.Text
+    config.merchantRoleId = merchantRoleInput.Text
+    saveConfig()
+    saveWebhookBtn.Text = "Saved!"
+    saveWebhookBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 0)
+    sendBossWebhookNotification("None", "Webhook settings updated successfully!")
+
+    task.delay(2, function()
+        saveWebhookBtn.Text = "Save Webhook & Role Settings"
+        saveWebhookBtn.BackgroundColor3 = Color3.fromRGB(50, 100, 200)
+    end)
+end)
+
+local function isMerchantGuiActive()
+    local playerGui = player:FindFirstChild("PlayerGui")
+    if not playerGui then return false end
+    local shop = playerGui:FindFirstChild("Shop")
+    if shop then
+        local merchantShop = shop:FindFirstChild("MerchantShop")
+        if merchantShop and merchantShop.Visible then return true end
+        local merchantStart = shop:FindFirstChild("MerchantShopStart")
+        if merchantStart and merchantStart.Visible then return true end
+    end
+    return false
+end
+
+-- DEEP SCAN DETECTOR FOR 'Dummy'
+local function findMerchantNPC()
+    for _, descendant in ipairs(workspace:GetDescendants()) do
+        if descendant:IsA("Model") and (descendant.Name == "Dummy" or descendant.Name:lower():find("merchant")) then
+            local hasStartPos = descendant:FindFirstChild("StartPos")
+            local hasWaitPos = descendant:FindFirstChild("WaitPos")
+            local hasFancyMoustache = descendant:FindFirstChild("Fancy Moustache")
+            local root = descendant:FindFirstChild("HumanoidRootPart") or descendant.PrimaryPart
+
+            if root and (hasStartPos or hasWaitPos or hasFancyMoustache or descendant.Name:lower():find("merchant")) then
+                return root
+            end
+        end
+    end
+    return nil
+end
+
+-- MERCHANT LOOP
+local merchantAlreadyNotified = false
+
+task.spawn(function()
+    while true do
+        local merchantRoot = findMerchantNPC()
+        local guiActive = isMerchantGuiActive()
+
+        if merchantRoot or guiActive then
+            if not merchantAlreadyNotified then
+                merchantAlreadyNotified = true
+                print("🛒 [Merchant Check] MERCHANT FOUND IN WORKSPACE!")
+                sendMerchantWebhookNotification()
+            end
+        else
+            if merchantAlreadyNotified then
+                print("[Merchant Check] Merchant disappeared from workspace.")
+                merchantAlreadyNotified = false
+            end
+        end
+        task.wait(3)
+    end
+end)
+
+local function setupDeathListener(humanoid, bossName)
+    if trackedBosses[humanoid] then return end
+    trackedBosses[humanoid] = true
+
+    humanoid.Died:Connect(function()
+        totalKills = totalKills + 1
+        task.delay(1.5, function()
+            sendBossWebhookNotification(bossName)
+        end)
+    end)
+end
+
+local function findBossNPC(bossFolder, bossName)
+    if not bossFolder or not bossFolder.Parent then return nil end
+    for _, child in ipairs(bossFolder:GetChildren()) do
+        if child:IsA("Model") then
+            local humanoid = child:FindFirstChildOfClass("Humanoid")
+            if humanoid and humanoid.Health > 0 then
+                setupDeathListener(humanoid, bossName)
+                local rootPart = child:FindFirstChild("HumanoidRootPart") or child.PrimaryPart
+                if rootPart then return rootPart end
+            end
+        end
+    end
+    for _, descendant in ipairs(bossFolder:GetDescendants()) do
+        if descendant:IsA("Humanoid") and descendant.Health > 0 then
+            setupDeathListener(descendant, bossName)
+            local bossModel = descendant.Parent
+            if bossModel and bossModel:IsA("Model") then
+                local rootPart = bossModel:FindFirstChild("HumanoidRootPart") or bossModel.PrimaryPart
+                if rootPart then return rootPart end
+            end
+        end
+    end
+    return nil
+end
+
+local function findAliveBossTarget()
+    local folder = workspace:FindFirstChild("BossesAreas")
+    if not folder then return nil end
+
+    for _, bossName in ipairs(allowedBosses) do
+        if config.bossToggles[bossName] ~= false then
+            local bossFolder = folder:FindFirstChild(bossName)
+            if bossFolder then
+                local targetPart = findBossNPC(bossFolder, bossName)
+                if targetPart then return targetPart, bossName end
+            end
+        end
+    end
+    return nil
+end
+
+local function isSlot3Equipped()
+    local playerGui = player:FindFirstChild("PlayerGui")
+    if playerGui and playerGui:FindFirstChild("Backpack") and playerGui.Backpack:FindFirstChild("Hotbar") then
+        local slot3 = playerGui.Backpack.Hotbar:FindFirstChild("3")
+        if slot3 and slot3:FindFirstChild("Equipped") then return slot3.Equipped.Visible end
+    end
+    if character then
+        for _, child in ipairs(character:GetChildren()) do
+            if child:IsA("Tool") or child.Name:lower():find("stomp") then return true end
+        end
+    end
+    return false
+end
+
+local function ensureSlot3Equipped()
+    if not isSlot3Equipped() then
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Three, false, game)
+        task.wait(0.05)
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Three, false, game)
+    end
+end
+
+local function executeAutoAttack()
+    if not character then return end
+    ensureSlot3Equipped()
+    local currentTool = character:FindFirstChildOfClass("Tool")
+    if currentTool then
+        currentTool:Activate()
+    else
+        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+        task.wait(0.05)
+        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+    end
+end
+
+task.spawn(function()
+    while true do
+        if config.autoTpEnabled and character and character.Parent then
+            local myRoot = character:FindFirstChild("HumanoidRootPart")
+            local targetPart = findAliveBossTarget()
+
+            if targetPart and myRoot then
+                myRoot.CFrame = targetPart.CFrame * SAFE_OFFSET
+                local distance = (myRoot.Position - targetPart.Position).Magnitude
+                if distance <= 25 then
+                    executeAutoAttack()
+                end
+            end
+        else
+            findAliveBossTarget()
+        end
+        task.wait(loopDelay)
+    end
+end)
+
+player.CharacterAdded:Connect(function(newChar)
+    character = newChar
+end)
+
+print("[Loaded] Updated merchant detector with deep scanning and error reporting.")
