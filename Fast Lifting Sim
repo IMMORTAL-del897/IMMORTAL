@@ -54,6 +54,7 @@ loadConfig()
 
 local SAFE_OFFSET = CFrame.new(0, 3, 10)
 local loopDelay = 0.3
+local currentTargetPart = nil -- Stores the currently engaged boss target
 
 -- GUI Setup
 local screenGui = Instance.new("ScreenGui")
@@ -208,6 +209,14 @@ for idx, bossName in ipairs(allowedBosses) do
     end)
 end
 
+local function isPartAlive(rootPart)
+    if not rootPart or not rootPart.Parent then return false end
+    local model = rootPart.Parent
+    if not model:IsA("Model") then return false end
+    local humanoid = model:FindFirstChildOfClass("Humanoid")
+    return humanoid and humanoid.Health > 0
+end
+
 local function findBossNPC(bossFolder)
     if not bossFolder or not bossFolder.Parent then return nil end
     for _, child in ipairs(bossFolder:GetChildren()) do
@@ -232,18 +241,31 @@ local function findBossNPC(bossFolder)
 end
 
 local function findAliveBossTarget()
+    -- Check if the current boss target is still valid and alive first
+    if currentTargetPart and isPartAlive(currentTargetPart) then
+        return currentTargetPart
+    end
+
     local folder = workspace:FindFirstChild("BossesAreas")
-    if not folder then return nil end
+    if not folder then 
+        currentTargetPart = nil
+        return nil 
+    end
 
     for _, bossName in ipairs(allowedBosses) do
         if config.bossToggles[bossName] ~= false then
             local bossFolder = folder:FindFirstChild(bossName)
             if bossFolder then
                 local targetPart = findBossNPC(bossFolder)
-                if targetPart then return targetPart end
+                if targetPart then 
+                    currentTargetPart = targetPart
+                    return targetPart 
+                end
             end
         end
     end
+    
+    currentTargetPart = nil
     return nil
 end
 
@@ -295,6 +317,8 @@ task.spawn(function()
                     executeAutoAttack()
                 end
             end
+        else
+            currentTargetPart = nil
         end
         task.wait(loopDelay)
     end
@@ -302,6 +326,7 @@ end)
 
 player.CharacterAdded:Connect(function(newChar)
     character = newChar
+    currentTargetPart = nil
 end)
 
-print("[Loaded] Boss Auto-Farm with setting auto-save enabled.")
+print("[Loaded] Boss Auto-Farm with Target Locking Ready.")
