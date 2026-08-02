@@ -54,7 +54,7 @@ loadConfig()
 
 local SAFE_OFFSET = CFrame.new(0, 3, 10)
 local loopDelay = 0.3
-local currentTargetPart = nil -- Stores the currently engaged boss target
+local currentTargetPart = nil
 
 -- GUI Setup
 local screenGui = Instance.new("ScreenGui")
@@ -63,8 +63,10 @@ screenGui.ResetOnSpawn = false
 screenGui.Parent = player:WaitForChild("PlayerGui")
 
 local mainContainer = Instance.new("Frame")
-mainContainer.Size = UDim2.new(0, 250, 0, 240)
-mainContainer.Position = UDim2.new(0.05, 0, 0.2, 0)
+mainContainer.Size = UDim2.new(0, 250, 0, 265)
+-- Centered horizontally
+mainContainer.AnchorPoint = Vector2.new(0.5, 0.5)
+mainContainer.Position = UDim2.new(0.5, 0, 0.5, 0)
 mainContainer.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
 mainContainer.Active = true
 mainContainer.Visible = true
@@ -76,7 +78,8 @@ mainCorner.Parent = mainContainer
 
 local openBtn = Instance.new("TextButton")
 openBtn.Size = UDim2.new(0, 40, 0, 40)
-openBtn.Position = UDim2.new(0.05, 0, 0.2, 0)
+openBtn.AnchorPoint = Vector2.new(0.5, 0.5)
+openBtn.Position = UDim2.new(0.5, 0, 0.5, 0)
 openBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
 openBtn.Text = "＋"
 openBtn.TextColor3 = Color3.fromRGB(0, 255, 150)
@@ -145,9 +148,45 @@ end
 enableDragging(mainContainer)
 enableDragging(openBtn)
 
+-- Server Uptime Display
+local timeLabel = Instance.new("TextLabel")
+timeLabel.Size = UDim2.new(0, 200, 0, 20)
+timeLabel.Position = UDim2.new(0, 10, 0, 10)
+timeLabel.BackgroundTransparency = 1
+timeLabel.Text = "Server Time: 00:00:00"
+timeLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+timeLabel.TextSize = 13
+timeLabel.Font = Enum.Font.SourceSansBold
+timeLabel.Parent = mainContainer
+
+local function getExactServerUptime()
+    local totalSeconds = 0
+    local success, serverNow = pcall(function() return workspace:GetServerTimeNow() end)
+    
+    if success and serverNow then
+        totalSeconds = math.floor(serverNow)
+    else
+        totalSeconds = math.floor(workspace.DistributedGameTime)
+    end
+
+    local uptime = totalSeconds % 86400
+    local h = math.floor(uptime / 3600)
+    local m = math.floor((uptime % 3600) / 60)
+    local s = uptime % 60
+
+    return string.format("Server Time: %02d:%02d:%02d", h, m, s)
+end
+
+task.spawn(function()
+    while true do
+        timeLabel.Text = getExactServerUptime()
+        task.wait(1)
+    end
+end)
+
 local toggleBtn = Instance.new("TextButton")
 toggleBtn.Size = UDim2.new(0, 200, 0, 35)
-toggleBtn.Position = UDim2.new(0, 10, 0, 10)
+toggleBtn.Position = UDim2.new(0, 10, 0, 35)
 toggleBtn.BackgroundColor3 = config.autoTpEnabled and Color3.fromRGB(0, 170, 0) or Color3.fromRGB(170, 0, 0)
 toggleBtn.Text = config.autoTpEnabled and "Auto TP: ON" or "Auto TP: OFF"
 toggleBtn.TextColor3 = Color3.new(1, 1, 1)
@@ -168,7 +207,7 @@ end)
 
 local scrollFrame = Instance.new("ScrollingFrame")
 scrollFrame.Size = UDim2.new(0, 230, 0, 175)
-scrollFrame.Position = UDim2.new(0, 10, 0, 55)
+scrollFrame.Position = UDim2.new(0, 10, 0, 80)
 scrollFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
 scrollFrame.CanvasSize = UDim2.new(0, 0, 0, #allowedBosses * 35 + 5)
 scrollFrame.ScrollBarThickness = 6
@@ -241,7 +280,6 @@ local function findBossNPC(bossFolder)
 end
 
 local function findAliveBossTarget()
-    -- Check if the current boss target is still valid and alive first
     if currentTargetPart and isPartAlive(currentTargetPart) then
         return currentTargetPart
     end
@@ -329,4 +367,4 @@ player.CharacterAdded:Connect(function(newChar)
     currentTargetPart = nil
 end)
 
-print("[Loaded] Boss Auto-Farm with Target Locking Ready.")
+print("[Loaded] Boss Auto-Farm Ready.")
