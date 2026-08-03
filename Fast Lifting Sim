@@ -4,21 +4,15 @@ local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
 local UserInputService = game:GetService("UserInputService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
-local VirtualUser = game:GetService("VirtualUser")
 
 local player = Players.LocalPlayer
 local character = player.Character or player.CharacterAdded:Wait()
-
--- ANTI-AFK SYSTEM
-player.Idled:Connect(function()
-    VirtualUser:CaptureController()
-    VirtualUser:ClickButton2(Vector2.new())
-end)
 
 local CONFIG_FILE = "BossTracker_Settings.json"
 
 local config = {
     autoTpEnabled = false,
+    crateTpEnabled = false,
     bossToggles = {
         ["EarthBoss"] = true, ["FreezeBoss"] = true, ["LavaGolem"] = true,
         ["MushroomGolem"] = true, ["CrystalGolem"] = true, ["Agrynoth"] = true,
@@ -49,6 +43,7 @@ local function loadConfig()
             local decSuccess, result = pcall(function() return HttpService:JSONDecode(rawData) end)
             if decSuccess and type(result) == "table" then
                 if result.autoTpEnabled ~= nil then config.autoTpEnabled = result.autoTpEnabled end
+                if result.crateTpEnabled ~= nil then config.crateTpEnabled = result.crateTpEnabled end
                 if result.bossToggles ~= nil then
                     for k, v in pairs(result.bossToggles) do config.bossToggles[k] = v end
                 end
@@ -60,8 +55,11 @@ end
 loadConfig()
 
 local SAFE_OFFSET = CFrame.new(0, 3, 10)
-local loopDelay = 0.3
+local CRATE_OFFSET = CFrame.new(0, 2, 5) -- 5 studs away, 2 studs up
+local loopDelay = 0.35
 local currentTargetPart = nil
+local isFarmingCrate = false
+local processedCrates = {}
 
 -- GUI Setup
 local screenGui = Instance.new("ScreenGui")
@@ -70,7 +68,7 @@ screenGui.ResetOnSpawn = false
 screenGui.Parent = player:WaitForChild("PlayerGui")
 
 local mainContainer = Instance.new("Frame")
-mainContainer.Size = UDim2.new(0, 250, 0, 240)
+mainContainer.Size = UDim2.new(0, 250, 0, 280)
 mainContainer.AnchorPoint = Vector2.new(0.5, 0.5)
 mainContainer.Position = UDim2.new(0.5, 0, 0.5, 0)
 mainContainer.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
@@ -154,13 +152,14 @@ end
 enableDragging(mainContainer)
 enableDragging(openBtn)
 
+-- Auto Boss Toggle
 local toggleBtn = Instance.new("TextButton")
-toggleBtn.Size = UDim2.new(0, 200, 0, 35)
+toggleBtn.Size = UDim2.new(0, 230, 0, 30)
 toggleBtn.Position = UDim2.new(0, 10, 0, 10)
 toggleBtn.BackgroundColor3 = config.autoTpEnabled and Color3.fromRGB(0, 170, 0) or Color3.fromRGB(170, 0, 0)
-toggleBtn.Text = config.autoTpEnabled and "Auto TP: ON" or "Auto TP: OFF"
+toggleBtn.Text = config.autoTpEnabled and "Auto Boss: ON" or "Auto Boss: OFF"
 toggleBtn.TextColor3 = Color3.new(1, 1, 1)
-toggleBtn.TextSize = 14
+toggleBtn.TextSize = 13
 toggleBtn.Font = Enum.Font.SourceSansBold
 toggleBtn.Parent = mainContainer
 
@@ -170,14 +169,37 @@ btnCorner.Parent = toggleBtn
 
 toggleBtn.MouseButton1Click:Connect(function()
     config.autoTpEnabled = not config.autoTpEnabled
-    toggleBtn.Text = config.autoTpEnabled and "Auto TP: ON" or "Auto TP: OFF"
+    toggleBtn.Text = config.autoTpEnabled and "Auto Boss: ON" or "Auto Boss: OFF"
     toggleBtn.BackgroundColor3 = config.autoTpEnabled and Color3.fromRGB(0, 170, 0) or Color3.fromRGB(170, 0, 0)
     saveConfig()
 end)
 
+-- Get Crates Toggle
+local crateBtn = Instance.new("TextButton")
+crateBtn.Size = UDim2.new(0, 230, 0, 30)
+crateBtn.Position = UDim2.new(0, 10, 0, 45)
+crateBtn.BackgroundColor3 = config.crateTpEnabled and Color3.fromRGB(0, 170, 0) or Color3.fromRGB(170, 0, 0)
+crateBtn.Text = config.crateTpEnabled and "Get Crates: ON" or "Get Crates: OFF"
+crateBtn.TextColor3 = Color3.new(1, 1, 1)
+crateBtn.TextSize = 13
+crateBtn.Font = Enum.Font.SourceSansBold
+crateBtn.Parent = mainContainer
+
+local crateCorner = Instance.new("UICorner")
+crateCorner.CornerRadius = UDim.new(0, 6)
+crateCorner.Parent = crateBtn
+
+crateBtn.MouseButton1Click:Connect(function()
+    config.crateTpEnabled = not config.crateTpEnabled
+    crateBtn.Text = config.crateTpEnabled and "Get Crates: ON" or "Get Crates: OFF"
+    crateBtn.BackgroundColor3 = config.crateTpEnabled and Color3.fromRGB(0, 170, 0) or Color3.fromRGB(170, 0, 0)
+    saveConfig()
+end)
+
+-- Boss List Container
 local scrollFrame = Instance.new("ScrollingFrame")
-scrollFrame.Size = UDim2.new(0, 230, 0, 175)
-scrollFrame.Position = UDim2.new(0, 10, 0, 55)
+scrollFrame.Size = UDim2.new(0, 230, 0, 190)
+scrollFrame.Position = UDim2.new(0, 10, 0, 80)
 scrollFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
 scrollFrame.CanvasSize = UDim2.new(0, 0, 0, #allowedBosses * 35 + 5)
 scrollFrame.ScrollBarThickness = 6
@@ -218,11 +240,10 @@ for idx, bossName in ipairs(allowedBosses) do
     end)
 end
 
+-- BOSS LOGIC
 local function isPartAlive(rootPart)
     if not rootPart or not rootPart.Parent then return false end
-    local model = rootPart.Parent
-    if not model:IsA("Model") then return false end
-    local humanoid = model:FindFirstChildOfClass("Humanoid")
+    local humanoid = rootPart.Parent:FindFirstChildOfClass("Humanoid")
     return humanoid and humanoid.Health > 0
 end
 
@@ -233,15 +254,6 @@ local function findBossNPC(bossFolder)
             local humanoid = child:FindFirstChildOfClass("Humanoid")
             if humanoid and humanoid.Health > 0 then
                 local rootPart = child:FindFirstChild("HumanoidRootPart") or child.PrimaryPart
-                if rootPart then return rootPart end
-            end
-        end
-    end
-    for _, descendant in ipairs(bossFolder:GetDescendants()) do
-        if descendant:IsA("Humanoid") and descendant.Health > 0 then
-            local bossModel = descendant.Parent
-            if bossModel and bossModel:IsA("Model") then
-                local rootPart = bossModel:FindFirstChild("HumanoidRootPart") or bossModel.PrimaryPart
                 if rootPart then return rootPart end
             end
         end
@@ -312,21 +324,117 @@ local function executeAutoAttack()
     end
 end
 
+-- CRATE LOGIC
+local function isValidSpawnedCrate(obj)
+    if not obj or not obj.Parent or obj.Name ~= "Crate" then return false end
+    if not (obj:IsA("Model") or obj:IsA("BasePart")) then return false end
+
+    local hasPrize = obj:FindFirstChild("Prize") or obj:FindFirstChild("Script")
+    local parentName = string.lower(obj.Parent.Name)
+    local isMapDecor = parentName:find("shop") or parentName:find("map") or parentName:find("building")
+
+    return (hasPrize ~= nil) and not isMapDecor
+end
+
+local function getPhysicalPartFromCrate(crateObj)
+    if not crateObj then return nil end
+    if crateObj:IsA("BasePart") then return crateObj end
+    return crateObj:FindFirstChildWhichIsA("BasePart", true)
+end
+
+local function teleportToCrate(crateObj)
+    if isFarmingCrate or not crateObj or not crateObj.Parent or processedCrates[crateObj] then return end
+    
+    local myRoot = character and character:FindFirstChild("HumanoidRootPart")
+    if not myRoot then return end
+
+    isFarmingCrate = true
+    processedCrates[crateObj] = true
+
+    local previousCFrame = myRoot.CFrame
+
+    while crateObj and crateObj.Parent do
+        local targetPart = getPhysicalPartFromCrate(crateObj)
+        if not targetPart then break end
+        
+        myRoot = character and character:FindFirstChild("HumanoidRootPart")
+        if not myRoot then break end
+
+        -- Teleport to crate position
+        character:PivotTo(targetPart.CFrame * CRATE_OFFSET)
+
+        if firetouchinterest then
+            pcall(function()
+                firetouchinterest(myRoot, targetPart, 0)
+                task.wait(0.05)
+                firetouchinterest(myRoot, targetPart, 1)
+            end)
+        end
+
+        -- Wait 10 seconds before checking and teleporting again if crate is still present
+        task.wait(10)
+    end
+
+    -- Return to previous position once crate is collected/gone
+    myRoot = character and character:FindFirstChild("HumanoidRootPart")
+    if myRoot and previousCFrame then
+        character:PivotTo(previousCFrame)
+    end
+
+    task.wait(0.2)
+    isFarmingCrate = false
+end
+
 task.spawn(function()
     while true do
-        if config.autoTpEnabled and character and character.Parent then
-            local myRoot = character:FindFirstChild("HumanoidRootPart")
-            local targetPart = findAliveBossTarget()
-
-            if targetPart and myRoot then
-                myRoot.CFrame = targetPart.CFrame * SAFE_OFFSET
-                local distance = (myRoot.Position - targetPart.Position).Magnitude
-                if distance <= 25 then
-                    executeAutoAttack()
-                end
+        for crate, _ in pairs(processedCrates) do
+            if not crate or not crate.Parent then
+                processedCrates[crate] = nil
             end
-        else
-            currentTargetPart = nil
+        end
+        task.wait(3)
+    end
+end)
+
+local function findAvailableCrate()
+    for _, obj in ipairs(workspace:GetChildren()) do
+        if not processedCrates[obj] and isValidSpawnedCrate(obj) then
+            if getPhysicalPartFromCrate(obj) then
+                return obj
+            end
+        end
+    end
+    return nil
+end
+
+workspace.ChildAdded:Connect(function(child)
+    if config.crateTpEnabled and isValidSpawnedCrate(child) then
+        task.wait(0.1)
+        teleportToCrate(child)
+    end
+end)
+
+-- MAIN EXECUTION LOOP
+task.spawn(function()
+    while true do
+        if character and character.Parent then
+            local myRoot = character:FindFirstChild("HumanoidRootPart")
+            local crateToFarm = config.crateTpEnabled and findAvailableCrate() or nil
+
+            if crateToFarm then
+                teleportToCrate(crateToFarm)
+            elseif config.autoTpEnabled and not isFarmingCrate then
+                local targetPart = findAliveBossTarget()
+                if targetPart and myRoot then
+                    myRoot.CFrame = targetPart.CFrame * SAFE_OFFSET
+                    local distance = (myRoot.Position - targetPart.Position).Magnitude
+                    if distance <= 25 then
+                        executeAutoAttack()
+                    end
+                end
+            else
+                currentTargetPart = nil
+            end
         end
         task.wait(loopDelay)
     end
@@ -335,6 +443,7 @@ end)
 player.CharacterAdded:Connect(function(newChar)
     character = newChar
     currentTargetPart = nil
+    table.clear(processedCrates)
 end)
 
-print("[Loaded] Boss Auto-Farm Ready.")
+print("[Loaded] 10-Second Crate Teleport Loop Applied.")
