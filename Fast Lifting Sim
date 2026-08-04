@@ -4,6 +4,7 @@ local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
 local UserInputService = game:GetService("UserInputService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
+local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
 local character = player.Character or player.CharacterAdded:Wait()
@@ -55,7 +56,7 @@ end
 loadConfig()
 
 local SAFE_OFFSET = CFrame.new(0, 3, 10)
-local CRATE_OFFSET = CFrame.new(0, 0, 0) -- Teleports directly to center
+local CRATE_OFFSET = CFrame.new(5, 5, 20)
 local loopDelay = 0.25
 local currentTargetPart = nil
 local isFarmingCrate = false
@@ -356,9 +357,18 @@ local function farmCrate(crateObj)
     local savedCFrame = myRoot.CFrame
     local targetPart = getPhysicalPartFromCrate(crateObj)
 
+    -- ENABLE NOCLIP (Disables collision on all body parts every frame)
+    local noclipConnection = RunService.Stepped:Connect(function()
+        if character then
+            for _, part in ipairs(character:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    part.CanCollide = false
+                end
+            end
+        end
+    end)
+
     if targetPart then
-        -- Disable collision so fitting inside massive crates won't fling you
-        myRoot.CanCollide = false
         myRoot.AssemblyLinearVelocity = Vector3.zero
         myRoot.CFrame = targetPart.CFrame * CRATE_OFFSET
 
@@ -371,22 +381,26 @@ local function farmCrate(crateObj)
             end)
         end
 
-        -- 2. PAUSE LOOP: Hold position at exact center until despawned/claimed
+        -- 2. PAUSE LOOP: Hold position with noclip active until despawned/claimed
         while crateObj and crateObj.Parent and targetPart and targetPart.Parent do
             if character and character:FindFirstChild("HumanoidRootPart") then
-                character.HumanoidRootPart.CanCollide = false
                 character.HumanoidRootPart.CFrame = targetPart.CFrame * CRATE_OFFSET
             end
             task.wait(0.1)
         end
     end
 
-    -- 3. UNPAUSE & RETURN: Crate is gone, restore collision and return to saved location
+    -- 3. UNPAUSE & RETURN: Return to saved location first
     myRoot = character and character:FindFirstChild("HumanoidRootPart")
     if myRoot and savedCFrame then
-        myRoot.CanCollide = true
         myRoot.AssemblyLinearVelocity = Vector3.zero
         myRoot.CFrame = savedCFrame
+    end
+
+    -- DISABLE NOCLIP (Cleanly stop disabling collisions)
+    if noclipConnection then
+        noclipConnection:Disconnect()
+        noclipConnection = nil
     end
 
     task.wait(0.1)
@@ -441,4 +455,4 @@ player.CharacterAdded:Connect(function(newChar)
     table.clear(processedCrates)
 end)
 
-print("[Loaded] Center Crate Teleport Fix Applied.")
+print("[Loaded] Temporary Noclip for Crate Teleport Applied.")
