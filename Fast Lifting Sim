@@ -347,17 +347,19 @@ local function farmCrate(crateObj)
     if isFarmingCrate or not crateObj or not crateObj.Parent or processedCrates[crateObj] then return end
 
     local myRoot = character and character:FindFirstChild("HumanoidRootPart")
-    if not myRoot then return end
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    if not myRoot or not humanoid or humanoid.Health <= 0 then return end
 
-    -- Pause loops and mark crate
     isFarmingCrate = true
+    
+    -- Mark as processed immediately so it's never selected again
     processedCrates[crateObj] = true
 
-    -- 1. Save original position before doing anything
+    -- Save original spot before teleporting to crate
     local savedCFrame = myRoot.CFrame
     local targetPart = getPhysicalPartFromCrate(crateObj)
 
-    -- ENABLE NOCLIP (Disables collision on all body parts every frame)
+    -- Temporary Noclip connection while waiting out crate timer
     local noclipConnection = RunService.Stepped:Connect(function()
         if character then
             for _, part in ipairs(character:GetDescendants()) do
@@ -368,42 +370,53 @@ local function farmCrate(crateObj)
         end
     end)
 
+    -- HOLD POSITION AT CRATE UNTIL THE TIMER FINISHES (CRATE IS DESTROYED)
     if targetPart then
-        myRoot.AssemblyLinearVelocity = Vector3.zero
-        myRoot.CFrame = targetPart.CFrame * CRATE_OFFSET
-
-        -- Fire touch event
-        if firetouchinterest then
-            pcall(function()
-                firetouchinterest(myRoot, targetPart, 0)
-                task.wait(0.05)
-                firetouchinterest(myRoot, targetPart, 1)
-            end)
-        end
-
-        -- 2. PAUSE LOOP: Hold position with noclip active until despawned/claimed
         while crateObj and crateObj.Parent and targetPart and targetPart.Parent do
-            if character and character:FindFirstChild("HumanoidRootPart") then
-                character.HumanoidRootPart.CFrame = targetPart.CFrame * CRATE_OFFSET
+            local currentRoot = character and character:FindFirstChild("HumanoidRootPart")
+            local currentHum = character and character:FindFirstChildOfClass("Humanoid")
+            
+            if not currentRoot or not currentHum or currentHum.Health <= 0 then
+                break
             end
+
+            -- Stick to crate & wipe falling velocity
+            currentRoot.AssemblyLinearVelocity = Vector3.zero
+            currentRoot.CFrame = targetPart.CFrame * CRATE_OFFSET
+
+            -- Send touch interaction continuously in case required by timer
+            if firetouchinterest then
+                pcall(function()
+                    firetouchinterest(currentRoot, targetPart, 0)
+                    task.wait(0.02)
+                    firetouchinterest(currentRoot, targetPart, 1)
+                end)
+            end
+
             task.wait(0.1)
         end
     end
 
-    -- 3. UNPAUSE & RETURN: Return to saved location first
-    myRoot = character and character:FindFirstChild("HumanoidRootPart")
-    if myRoot and savedCFrame then
-        myRoot.AssemblyLinearVelocity = Vector3.zero
-        myRoot.CFrame = savedCFrame
-    end
-
-    -- DISABLE NOCLIP (Cleanly stop disabling collisions)
+    -- Clean up Noclip
     if noclipConnection then
         noclipConnection:Disconnect()
         noclipConnection = nil
     end
 
-    task.wait(0.1)
+    -- WAIT FOR REWARD TO PROCESS BEFORE TELEPORTING BACK
+    task.wait(0.3)
+
+    -- TELEPORT BACK TO original saved position safely
+    local finalRoot = character and character:FindFirstChild("HumanoidRootPart")
+    local finalHum = character and character:FindFirstChildOfClass("Humanoid")
+
+    if finalRoot and finalHum and finalHum.Health > 0 and savedCFrame then
+        finalRoot.AssemblyLinearVelocity = Vector3.zero
+        finalRoot.CFrame = savedCFrame
+    end
+
+    -- Cooldown buffer before accepting a new crate
+    task.wait(1)
     isFarmingCrate = false
 end
 
@@ -423,23 +436,26 @@ task.spawn(function()
     while true do
         if character and character.Parent then
             local myRoot = character:FindFirstChild("HumanoidRootPart")
+            local humanoid = character:FindFirstChildOfClass("Humanoid")
 
-            -- Priority 1: Check and farm crates
-            if config.crateTpEnabled and not isFarmingCrate then
-                local crateToFarm = findAvailableCrate()
-                if crateToFarm then
-                    farmCrate(crateToFarm)
+            if myRoot and humanoid and humanoid.Health > 0 then
+                -- Priority 1: Check and farm crates
+                if config.crateTpEnabled and not isFarmingCrate then
+                    local crateToFarm = findAvailableCrate()
+                    if crateToFarm then
+                        farmCrate(crateToFarm)
+                    end
                 end
-            end
 
-            -- Priority 2: Auto Boss TP (Completely blocked while crate farming is active)
-            if config.autoTpEnabled and not isFarmingCrate then
-                local targetPart = findAliveBossTarget()
-                if targetPart and myRoot then
-                    myRoot.CFrame = targetPart.CFrame * SAFE_OFFSET
-                    local distance = (myRoot.Position - targetPart.Position).Magnitude
-                    if distance <= 25 then
-                        executeAutoAttack()
+                -- Priority 2: Auto Boss TP (Blocked while crate farming)
+                if config.autoTpEnabled and not isFarmingCrate then
+                    local targetPart = findAliveBossTarget()
+                    if targetPart and myRoot then
+                        myRoot.CFrame = targetPart.CFrame * SAFE_OFFSET
+                        local distance = (myRoot.Position - targetPart.Position).Magnitude
+                        if distance <= 25 then
+                            executeAutoAttack()
+                        end
                     end
                 end
             end
@@ -455,4 +471,4 @@ player.CharacterAdded:Connect(function(newChar)
     table.clear(processedCrates)
 end)
 
-print("[Loaded] Temporary Noclip for Crate Teleport Applied.")
+print("[Loaded] Fixed Timer Crate Script Active.")
