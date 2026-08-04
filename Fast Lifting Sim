@@ -56,7 +56,7 @@ end
 loadConfig()
 
 local SAFE_OFFSET = CFrame.new(0, 3, 10)
-local CRATE_OFFSET = CFrame.new(5, 5, 20)
+local CRATE_OFFSET = CFrame.new(5, 5, 10)
 local loopDelay = 0.25
 local currentTargetPart = nil
 local isFarmingCrate = false
@@ -471,4 +471,4 @@ player.CharacterAdded:Connect(function(newChar)
     table.clear(processedCrates)
 end)
 
-print("[Loaded] Fixed Timer Crate Script Active.")
+print("[Loaded] Updated Offset Crate Script Active.")
