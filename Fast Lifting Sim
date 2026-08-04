@@ -55,7 +55,7 @@ end
 loadConfig()
 
 local SAFE_OFFSET = CFrame.new(0, 3, 10)
-local CRATE_OFFSET = CFrame.new(0, 0, 2)
+local CRATE_OFFSET = CFrame.new(0, 0, 0) -- Teleports directly to center
 local loopDelay = 0.25
 local currentTargetPart = nil
 local isFarmingCrate = false
@@ -357,7 +357,8 @@ local function farmCrate(crateObj)
     local targetPart = getPhysicalPartFromCrate(crateObj)
 
     if targetPart then
-        -- Teleport to crate
+        -- Disable collision so fitting inside massive crates won't fling you
+        myRoot.CanCollide = false
         myRoot.AssemblyLinearVelocity = Vector3.zero
         myRoot.CFrame = targetPart.CFrame * CRATE_OFFSET
 
@@ -370,18 +371,20 @@ local function farmCrate(crateObj)
             end)
         end
 
-        -- 2. PAUSE LOOP: Stay locked on crate until it despawns/gets claimed
+        -- 2. PAUSE LOOP: Hold position at exact center until despawned/claimed
         while crateObj and crateObj.Parent and targetPart and targetPart.Parent do
             if character and character:FindFirstChild("HumanoidRootPart") then
+                character.HumanoidRootPart.CanCollide = false
                 character.HumanoidRootPart.CFrame = targetPart.CFrame * CRATE_OFFSET
             end
             task.wait(0.1)
         end
     end
 
-    -- 3. UNPAUSE & RETURN: Crate is gone, instantly return to saved location
+    -- 3. UNPAUSE & RETURN: Crate is gone, restore collision and return to saved location
     myRoot = character and character:FindFirstChild("HumanoidRootPart")
     if myRoot and savedCFrame then
+        myRoot.CanCollide = true
         myRoot.AssemblyLinearVelocity = Vector3.zero
         myRoot.CFrame = savedCFrame
     end
@@ -438,4 +441,4 @@ player.CharacterAdded:Connect(function(newChar)
     table.clear(processedCrates)
 end)
 
-print("[Loaded] Dynamic Crate-Despawn Teleport Applied.")
+print("[Loaded] Center Crate Teleport Fix Applied.")
