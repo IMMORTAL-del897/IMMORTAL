@@ -55,7 +55,7 @@ end
 loadConfig()
 
 local SAFE_OFFSET = CFrame.new(0, 3, 10)
-local CRATE_OFFSET = CFrame.new(0, 2, 5) -- 5 studs away, 2 studs up
+local CRATE_OFFSET = CFrame.new(0, 0, 3)
 local loopDelay = 0.35
 local currentTargetPart = nil
 local isFarmingCrate = false
@@ -342,7 +342,7 @@ local function getPhysicalPartFromCrate(crateObj)
     return crateObj:FindFirstChildWhichIsA("BasePart", true)
 end
 
-local function teleportToCrate(crateObj)
+local function farmCrate(crateObj)
     if isFarmingCrate or not crateObj or not crateObj.Parent or processedCrates[crateObj] then return end
     
     local myRoot = character and character:FindFirstChild("HumanoidRootPart")
@@ -352,36 +352,34 @@ local function teleportToCrate(crateObj)
     processedCrates[crateObj] = true
 
     local previousCFrame = myRoot.CFrame
+    local targetPart = getPhysicalPartFromCrate(crateObj)
 
-    while crateObj and crateObj.Parent do
-        local targetPart = getPhysicalPartFromCrate(crateObj)
-        if not targetPart then break end
-        
-        myRoot = character and character:FindFirstChild("HumanoidRootPart")
-        if not myRoot then break end
+    if targetPart then
+        -- Teleport once directly to the crate
+        myRoot.CFrame = targetPart.CFrame * CRATE_OFFSET
 
-        -- Teleport to crate position
-        character:PivotTo(targetPart.CFrame * CRATE_OFFSET)
-
-        if firetouchinterest then
+        -- Trigger touch interest once
+        if firetouchinterest and myRoot and targetPart then
             pcall(function()
                 firetouchinterest(myRoot, targetPart, 0)
-                task.wait(0.05)
+                task.wait(0.02)
                 firetouchinterest(myRoot, targetPart, 1)
             end)
         end
 
-        -- Wait 10 seconds before checking and teleporting again if crate is still present
-        task.wait(10)
+        -- Hold position until crate despawns (No continuous teleporting)
+        while crateObj and crateObj.Parent and targetPart and targetPart.Parent do
+            task.wait(0.1)
+        end
     end
 
-    -- Return to previous position once crate is collected/gone
+    -- Return to original position
     myRoot = character and character:FindFirstChild("HumanoidRootPart")
     if myRoot and previousCFrame then
-        character:PivotTo(previousCFrame)
+        myRoot.CFrame = previousCFrame
     end
 
-    task.wait(0.2)
+    task.wait(0.1)
     isFarmingCrate = false
 end
 
@@ -410,7 +408,7 @@ end
 workspace.ChildAdded:Connect(function(child)
     if config.crateTpEnabled and isValidSpawnedCrate(child) then
         task.wait(0.1)
-        teleportToCrate(child)
+        farmCrate(child)
     end
 end)
 
@@ -422,7 +420,7 @@ task.spawn(function()
             local crateToFarm = config.crateTpEnabled and findAvailableCrate() or nil
 
             if crateToFarm then
-                teleportToCrate(crateToFarm)
+                farmCrate(crateToFarm)
             elseif config.autoTpEnabled and not isFarmingCrate then
                 local targetPart = findAliveBossTarget()
                 if targetPart and myRoot then
@@ -446,4 +444,4 @@ player.CharacterAdded:Connect(function(newChar)
     table.clear(processedCrates)
 end)
 
-print("[Loaded] 10-Second Crate Teleport Loop Applied.")
+print("[Loaded] Single-Teleport Crate Collector active.")
