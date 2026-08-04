@@ -5,15 +5,21 @@ local HttpService = game:GetService("HttpService")
 local UserInputService = game:GetService("UserInputService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local player = Players.LocalPlayer
 local character = player.Character or player.CharacterAdded:Wait()
+
+-- REAL REMOTE EVENT PATH FROM REMOTE SPY
+local REMOTE_NAME = "4c85c5705ad44e27883ec776e056211e"
+local attackRemote = ReplicatedStorage:FindFirstChild(REMOTE_NAME) or ReplicatedStorage:WaitForChild(REMOTE_NAME, 5)
 
 local CONFIG_FILE = "BossTracker_Settings.json"
 
 local config = {
     autoTpEnabled = false,
     crateTpEnabled = false,
+    fastAttackEnabled = true,
     bossToggles = {
         ["EarthBoss"] = true, ["FreezeBoss"] = true, ["LavaGolem"] = true,
         ["MushroomGolem"] = true, ["CrystalGolem"] = true, ["Agrynoth"] = true,
@@ -45,6 +51,7 @@ local function loadConfig()
             if decSuccess and type(result) == "table" then
                 if result.autoTpEnabled ~= nil then config.autoTpEnabled = result.autoTpEnabled end
                 if result.crateTpEnabled ~= nil then config.crateTpEnabled = result.crateTpEnabled end
+                if result.fastAttackEnabled ~= nil then config.fastAttackEnabled = result.fastAttackEnabled end
                 if result.bossToggles ~= nil then
                     for k, v in pairs(result.bossToggles) do config.bossToggles[k] = v end
                 end
@@ -56,20 +63,20 @@ end
 loadConfig()
 
 local SAFE_OFFSET = CFrame.new(0, 3, 10)
-local CRATE_OFFSET = CFrame.new(5, 5, 10)
-local loopDelay = 0.25
+local CRATE_OFFSET = CFrame.new(0, 5, 0)
+local loopDelay = 0.1
 local currentTargetPart = nil
 local isFarmingCrate = false
 local processedCrates = {}
 
--- GUI Setup
+-- GUI SETUP
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "BossTrackerGUI"
 screenGui.ResetOnSpawn = false
 screenGui.Parent = player:WaitForChild("PlayerGui")
 
 local mainContainer = Instance.new("Frame")
-mainContainer.Size = UDim2.new(0, 250, 0, 280)
+mainContainer.Size = UDim2.new(0, 250, 0, 320)
 mainContainer.AnchorPoint = Vector2.new(0.5, 0.5)
 mainContainer.Position = UDim2.new(0.5, 0, 0.5, 0)
 mainContainer.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
@@ -153,7 +160,7 @@ end
 enableDragging(mainContainer)
 enableDragging(openBtn)
 
--- Auto Boss Toggle
+-- GUI TOGGLES
 local toggleBtn = Instance.new("TextButton")
 toggleBtn.Size = UDim2.new(0, 230, 0, 30)
 toggleBtn.Position = UDim2.new(0, 10, 0, 10)
@@ -175,7 +182,6 @@ toggleBtn.MouseButton1Click:Connect(function()
     saveConfig()
 end)
 
--- Get Crates Toggle
 local crateBtn = Instance.new("TextButton")
 crateBtn.Size = UDim2.new(0, 230, 0, 30)
 crateBtn.Position = UDim2.new(0, 10, 0, 45)
@@ -197,10 +203,31 @@ crateBtn.MouseButton1Click:Connect(function()
     saveConfig()
 end)
 
--- Boss List Container
+local fastAttackBtn = Instance.new("TextButton")
+fastAttackBtn.Size = UDim2.new(0, 230, 0, 30)
+fastAttackBtn.Position = UDim2.new(0, 10, 0, 80)
+fastAttackBtn.BackgroundColor3 = config.fastAttackEnabled and Color3.fromRGB(0, 170, 0) or Color3.fromRGB(170, 0, 0)
+fastAttackBtn.Text = config.fastAttackEnabled and "Fast Attack: ON" or "Fast Attack: OFF"
+fastAttackBtn.TextColor3 = Color3.new(1, 1, 1)
+fastAttackBtn.TextSize = 13
+fastAttackBtn.Font = Enum.Font.SourceSansBold
+fastAttackBtn.Parent = mainContainer
+
+local fastCorner = Instance.new("UICorner")
+fastCorner.CornerRadius = UDim.new(0, 6)
+fastCorner.Parent = fastAttackBtn
+
+fastAttackBtn.MouseButton1Click:Connect(function()
+    config.fastAttackEnabled = not config.fastAttackEnabled
+    fastAttackBtn.Text = config.fastAttackEnabled and "Fast Attack: ON" or "Fast Attack: OFF"
+    fastAttackBtn.BackgroundColor3 = config.fastAttackEnabled and Color3.fromRGB(0, 170, 0) or Color3.fromRGB(170, 0, 0)
+    saveConfig()
+end)
+
+-- BOSS LIST SCROLL FRAME
 local scrollFrame = Instance.new("ScrollingFrame")
 scrollFrame.Size = UDim2.new(0, 230, 0, 190)
-scrollFrame.Position = UDim2.new(0, 10, 0, 80)
+scrollFrame.Position = UDim2.new(0, 10, 0, 118)
 scrollFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
 scrollFrame.CanvasSize = UDim2.new(0, 0, 0, #allowedBosses * 35 + 5)
 scrollFrame.ScrollBarThickness = 6
@@ -312,16 +339,27 @@ local function ensureSlot3Equipped()
     end
 end
 
-local function executeAutoAttack()
+local function executeAutoAttack(targetPart)
     if not character then return end
     ensureSlot3Equipped()
-    local currentTool = character:FindFirstChildOfClass("Tool")
-    if currentTool then
-        currentTool:Activate()
+
+    local targetModel = targetPart and targetPart.Parent
+
+    if config.fastAttackEnabled and attackRemote and targetModel then
+        for _ = 1, 5 do
+            pcall(function()
+                attackRemote:FireServer("PUNCH", targetModel)
+            end)
+        end
     else
-        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-        task.wait(0.05)
-        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+        local currentTool = character:FindFirstChildOfClass("Tool")
+        if currentTool then
+            currentTool:Activate()
+        else
+            VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+            task.wait(0.01)
+            VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+        end
     end
 end
 
@@ -351,15 +389,11 @@ local function farmCrate(crateObj)
     if not myRoot or not humanoid or humanoid.Health <= 0 then return end
 
     isFarmingCrate = true
-    
-    -- Mark as processed immediately so it's never selected again
     processedCrates[crateObj] = true
 
-    -- Save original spot before teleporting to crate
     local savedCFrame = myRoot.CFrame
     local targetPart = getPhysicalPartFromCrate(crateObj)
 
-    -- Temporary Noclip connection while waiting out crate timer
     local noclipConnection = RunService.Stepped:Connect(function()
         if character then
             for _, part in ipairs(character:GetDescendants()) do
@@ -370,25 +404,22 @@ local function farmCrate(crateObj)
         end
     end)
 
-    -- 5-SECOND TIMER HOLD AT CRATE
     local startTime = os.clock()
     while os.clock() - startTime < 5 do
         local currentRoot = character and character:FindFirstChild("HumanoidRootPart")
         local currentHum = character and character:FindFirstChildOfClass("Humanoid")
         
-        if not currentRoot or not currentHum or currentHum.Health <= 0 then
-            break
-        end
+        if not currentRoot or not currentHum or currentHum.Health <= 0 then break end
 
-        -- Keep character attached to crate if it exists, otherwise hold relative position
         if targetPart and targetPart.Parent then
             currentRoot.CFrame = targetPart.CFrame * CRATE_OFFSET
+            if config.fastAttackEnabled and attackRemote then
+                pcall(function() attackRemote:FireServer("PUNCH", targetPart.Parent) end)
+            end
         end
 
-        -- Wipe falling velocity
         currentRoot.AssemblyLinearVelocity = Vector3.zero
 
-        -- Send touch interaction continuously during the timer
         if targetPart and targetPart.Parent and firetouchinterest then
             pcall(function()
                 firetouchinterest(currentRoot, targetPart, 0)
@@ -397,16 +428,14 @@ local function farmCrate(crateObj)
             end)
         end
 
-        task.wait(0.1)
+        task.wait(0.05)
     end
 
-    -- Clean up Noclip
     if noclipConnection then
         noclipConnection:Disconnect()
         noclipConnection = nil
     end
 
-    -- TELEPORT BACK TO original saved position safely
     local finalRoot = character and character:FindFirstChild("HumanoidRootPart")
     local finalHum = character and character:FindFirstChildOfClass("Humanoid")
 
@@ -415,8 +444,7 @@ local function farmCrate(crateObj)
         finalRoot.CFrame = savedCFrame
     end
 
-    -- Cooldown buffer before accepting a new crate
-    task.wait(1)
+    task.wait(0.5)
     isFarmingCrate = false
 end
 
@@ -431,31 +459,20 @@ local function findAvailableCrate()
     return nil
 end
 
--- MAIN EXECUTION LOOP
+-- SEPARATED COROUTINES
 task.spawn(function()
     while true do
-        if character and character.Parent then
+        if config.autoTpEnabled and not isFarmingCrate and character and character.Parent then
             local myRoot = character:FindFirstChild("HumanoidRootPart")
             local humanoid = character:FindFirstChildOfClass("Humanoid")
 
             if myRoot and humanoid and humanoid.Health > 0 then
-                -- Priority 1: Check and farm crates
-                if config.crateTpEnabled and not isFarmingCrate then
-                    local crateToFarm = findAvailableCrate()
-                    if crateToFarm then
-                        farmCrate(crateToFarm)
-                    end
-                end
-
-                -- Priority 2: Auto Boss TP (Blocked while crate farming)
-                if config.autoTpEnabled and not isFarmingCrate then
-                    local targetPart = findAliveBossTarget()
-                    if targetPart and myRoot then
-                        myRoot.CFrame = targetPart.CFrame * SAFE_OFFSET
-                        local distance = (myRoot.Position - targetPart.Position).Magnitude
-                        if distance <= 25 then
-                            executeAutoAttack()
-                        end
+                local targetPart = findAliveBossTarget()
+                if targetPart then
+                    myRoot.CFrame = targetPart.CFrame * SAFE_OFFSET
+                    local distance = (myRoot.Position - targetPart.Position).Magnitude
+                    if distance <= 25 then
+                        executeAutoAttack(targetPart)
                     end
                 end
             end
@@ -464,6 +481,24 @@ task.spawn(function()
     end
 end)
 
+task.spawn(function()
+    while true do
+        if config.crateTpEnabled and not isFarmingCrate and character and character.Parent then
+            local myRoot = character:FindFirstChild("HumanoidRootPart")
+            local humanoid = character:FindFirstChildOfClass("Humanoid")
+
+            if myRoot and humanoid and humanoid.Health > 0 then
+                local crateToFarm = findAvailableCrate()
+                if crateToFarm then
+                    farmCrate(crateToFarm)
+                end
+            end
+        end
+        task.wait(loopDelay)
+    end
+end)
+
+-- RESPAWN REBINDING
 player.CharacterAdded:Connect(function(newChar)
     character = newChar
     currentTargetPart = nil
@@ -471,4 +506,4 @@ player.CharacterAdded:Connect(function(newChar)
     table.clear(processedCrates)
 end)
 
-print("[Loaded] 5-Second Delay Crate Script Active.")
+print("[Loaded] Direct RemoteSpy Hash Fast Attack Configured.")
