@@ -32,9 +32,7 @@ local allowedBosses = {
 -- SAVE / LOAD SYSTEM
 local function saveConfig()
     if writefile then
-        pcall(function() 
-            writefile(CONFIG_FILE, HttpService:JSONEncode(config)) 
-        end)
+        pcall(function() writefile(CONFIG_FILE, HttpService:JSONEncode(config)) end)
     end
 end
 
@@ -46,10 +44,8 @@ local function loadConfig()
             if decSuccess and type(result) == "table" then
                 if result.autoTpEnabled ~= nil then config.autoTpEnabled = result.autoTpEnabled end
                 if result.crateTpEnabled ~= nil then config.crateTpEnabled = result.crateTpEnabled end
-                if result.bossToggles ~= nil and type(result.bossToggles) == "table" then
-                    for k, v in pairs(result.bossToggles) do 
-                        config.bossToggles[k] = v 
-                    end
+                if result.bossToggles ~= nil then
+                    for k, v in pairs(result.bossToggles) do config.bossToggles[k] = v end
                 end
             end
         end
@@ -59,10 +55,11 @@ end
 loadConfig()
 
 local SAFE_OFFSET = CFrame.new(0, 3, 10)
+local CRATE_OFFSET = CFrame.new(0, 0, 3)
 local loopDelay = 0.35
 local currentTargetPart = nil
 local isFarmingCrate = false
-local lastCrateAttempt = 0
+local processedCrates = {}
 
 -- GUI Setup
 local screenGui = Instance.new("ScreenGui")
@@ -345,64 +342,83 @@ local function getPhysicalPartFromCrate(crateObj)
     return crateObj:FindFirstChildWhichIsA("BasePart", true)
 end
 
+local function farmCrate(crateObj)
+    if isFarmingCrate or not crateObj or not crateObj.Parent or processedCrates[crateObj] then return end
+    
+    local myRoot = character and character:FindFirstChild("HumanoidRootPart")
+    if not myRoot then return end
+
+    isFarmingCrate = true
+    processedCrates[crateObj] = true
+
+    local previousCFrame = myRoot.CFrame
+    local targetPart = getPhysicalPartFromCrate(crateObj)
+
+    if targetPart then
+        -- Teleport once directly to crate
+        myRoot.CFrame = targetPart.CFrame * CRATE_OFFSET
+
+        -- Claim touch interest
+        if firetouchinterest and myRoot and targetPart then
+            pcall(function()
+                firetouchinterest(myRoot, targetPart, 0)
+                task.wait(0.02)
+                firetouchinterest(myRoot, targetPart, 1)
+            end)
+        end
+
+        -- Hold until crate despawns or times out (max 3 seconds)
+        local timeout = 0
+        while crateObj and crateObj.Parent and targetPart and targetPart.Parent and timeout < 30 do
+            task.wait(0.1)
+            timeout = timeout + 1
+        end
+    end
+
+    -- Return to previous position instantly
+    myRoot = character and character:FindFirstChild("HumanoidRootPart")
+    if myRoot and previousCFrame then
+        myRoot.CFrame = previousCFrame
+    end
+
+    -- Reset farming flag immediately so Boss loop resumes
+    isFarmingCrate = false
+end
+
 local function findAvailableCrate()
     for _, obj in ipairs(workspace:GetChildren()) do
-        if isValidSpawnedCrate(obj) and getPhysicalPartFromCrate(obj) then
-            return obj
+        if not processedCrates[obj] and isValidSpawnedCrate(obj) then
+            if getPhysicalPartFromCrate(obj) then
+                return obj
+            end
         end
     end
     return nil
 end
 
-local function attemptCratePulse(crateObj)
-    if isFarmingCrate or not crateObj or not crateObj.Parent then return end
-
-    local hum = character and character:FindFirstChildOfClass("Humanoid")
-    local myRoot = character and character:FindFirstChild("HumanoidRootPart")
-    if not hum or hum.Health <= 0 or not myRoot then return end
-
-    local targetPart = getPhysicalPartFromCrate(crateObj)
-    if not targetPart or not targetPart.Parent then return end
-
-    isFarmingCrate = true
-    lastCrateAttempt = tick()
-
-    local previousCFrame = myRoot.CFrame
-
-    -- Teleport to crate
-    myRoot.CFrame = targetPart.CFrame
-    task.wait(0.15)
-
-    -- Teleport back if alive
-    hum = character and character:FindFirstChildOfClass("Humanoid")
-    myRoot = character and character:FindFirstChild("HumanoidRootPart")
-    if hum and hum.Health > 0 and myRoot and previousCFrame then
-        myRoot.CFrame = previousCFrame
+workspace.ChildAdded:Connect(function(child)
+    if config.crateTpEnabled and isValidSpawnedCrate(child) then
+        task.wait(0.1)
+        farmCrate(child)
     end
-
-    isFarmingCrate = false
-end
+end)
 
 -- MAIN EXECUTION LOOP
 task.spawn(function()
     while true do
-        local hum = character and character:FindFirstChildOfClass("Humanoid")
-        local myRoot = character and character:FindFirstChild("HumanoidRootPart")
+        if character and character.Parent then
+            local myRoot = character:FindFirstChild("HumanoidRootPart")
 
-        if hum and hum.Health > 0 and myRoot then
-            if config.crateTpEnabled then
+            if config.crateTpEnabled and not isFarmingCrate then
                 local crateToFarm = findAvailableCrate()
                 if crateToFarm then
-                    -- Teleports every 5 seconds until crate despawns or is taken
-                    if (tick() - lastCrateAttempt >= 5) and not isFarmingCrate then
-                        attemptCratePulse(crateToFarm)
-                    end
+                    farmCrate(crateToFarm)
                 end
             end
 
             if config.autoTpEnabled and not isFarmingCrate then
                 local targetPart = findAliveBossTarget()
-                if targetPart then
+                if targetPart and myRoot then
                     myRoot.CFrame = targetPart.CFrame * SAFE_OFFSET
                     local distance = (myRoot.Position - targetPart.Position).Magnitude
                     if distance <= 25 then
@@ -411,7 +427,6 @@ task.spawn(function()
                 end
             end
         end
-
         task.wait(loopDelay)
     end
 end)
@@ -419,7 +434,7 @@ end)
 player.CharacterAdded:Connect(function(newChar)
     character = newChar
     currentTargetPart = nil
-    isFarmingCrate = false
+    table.clear(processedCrates)
 end)
 
-print("[Loaded] Persistent 5-Second Crate Teleporter.")
+print("[Loaded] Fixed Resume-Teleport loop.")
