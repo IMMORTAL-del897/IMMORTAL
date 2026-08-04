@@ -55,8 +55,8 @@ end
 loadConfig()
 
 local SAFE_OFFSET = CFrame.new(0, 3, 10)
-local CRATE_OFFSET = CFrame.new(0, 0, 3)
-local loopDelay = 0.35
+local CRATE_OFFSET = CFrame.new(0, 0, 2)
+local loopDelay = 0.25
 local currentTargetPart = nil
 local isFarmingCrate = false
 local processedCrates = {}
@@ -344,44 +344,49 @@ end
 
 local function farmCrate(crateObj)
     if isFarmingCrate or not crateObj or not crateObj.Parent or processedCrates[crateObj] then return end
-    
+
     local myRoot = character and character:FindFirstChild("HumanoidRootPart")
     if not myRoot then return end
 
+    -- Pause loops and mark crate
     isFarmingCrate = true
     processedCrates[crateObj] = true
 
-    local previousCFrame = myRoot.CFrame
+    -- 1. Save original position before doing anything
+    local savedCFrame = myRoot.CFrame
     local targetPart = getPhysicalPartFromCrate(crateObj)
 
     if targetPart then
-        -- Teleport once directly to crate
+        -- Teleport to crate
+        myRoot.AssemblyLinearVelocity = Vector3.zero
         myRoot.CFrame = targetPart.CFrame * CRATE_OFFSET
 
-        -- Claim touch interest
-        if firetouchinterest and myRoot and targetPart then
+        -- Fire touch event
+        if firetouchinterest then
             pcall(function()
                 firetouchinterest(myRoot, targetPart, 0)
-                task.wait(0.02)
+                task.wait(0.05)
                 firetouchinterest(myRoot, targetPart, 1)
             end)
         end
 
-        -- Hold until crate despawns or times out (max 3 seconds)
-        local timeout = 0
-        while crateObj and crateObj.Parent and targetPart and targetPart.Parent and timeout < 30 do
+        -- 2. PAUSE LOOP: Stay locked on crate until it despawns/gets claimed
+        while crateObj and crateObj.Parent and targetPart and targetPart.Parent do
+            if character and character:FindFirstChild("HumanoidRootPart") then
+                character.HumanoidRootPart.CFrame = targetPart.CFrame * CRATE_OFFSET
+            end
             task.wait(0.1)
-            timeout = timeout + 1
         end
     end
 
-    -- Return to previous position instantly
+    -- 3. UNPAUSE & RETURN: Crate is gone, instantly return to saved location
     myRoot = character and character:FindFirstChild("HumanoidRootPart")
-    if myRoot and previousCFrame then
-        myRoot.CFrame = previousCFrame
+    if myRoot and savedCFrame then
+        myRoot.AssemblyLinearVelocity = Vector3.zero
+        myRoot.CFrame = savedCFrame
     end
 
-    -- Reset farming flag immediately so Boss loop resumes
+    task.wait(0.1)
     isFarmingCrate = false
 end
 
@@ -396,19 +401,13 @@ local function findAvailableCrate()
     return nil
 end
 
-workspace.ChildAdded:Connect(function(child)
-    if config.crateTpEnabled and isValidSpawnedCrate(child) then
-        task.wait(0.1)
-        farmCrate(child)
-    end
-end)
-
 -- MAIN EXECUTION LOOP
 task.spawn(function()
     while true do
         if character and character.Parent then
             local myRoot = character:FindFirstChild("HumanoidRootPart")
 
+            -- Priority 1: Check and farm crates
             if config.crateTpEnabled and not isFarmingCrate then
                 local crateToFarm = findAvailableCrate()
                 if crateToFarm then
@@ -416,6 +415,7 @@ task.spawn(function()
                 end
             end
 
+            -- Priority 2: Auto Boss TP (Completely blocked while crate farming is active)
             if config.autoTpEnabled and not isFarmingCrate then
                 local targetPart = findAliveBossTarget()
                 if targetPart and myRoot then
@@ -434,7 +434,8 @@ end)
 player.CharacterAdded:Connect(function(newChar)
     character = newChar
     currentTargetPart = nil
+    isFarmingCrate = false
     table.clear(processedCrates)
 end)
 
-print("[Loaded] Fixed Resume-Teleport loop.")
+print("[Loaded] Dynamic Crate-Despawn Teleport Applied.")
