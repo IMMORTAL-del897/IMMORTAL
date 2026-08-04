@@ -4,6 +4,7 @@ local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
 local UserInputService = game:GetService("UserInputService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
+local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
 local character = player.Character or player.CharacterAdded:Wait()
@@ -55,7 +56,6 @@ end
 loadConfig()
 
 local SAFE_OFFSET = CFrame.new(0, 3, 10)
-local CRATE_OFFSET = CFrame.new(0, 0, 3)
 local loopDelay = 0.35
 local currentTargetPart = nil
 local isFarmingCrate = false
@@ -355,33 +355,43 @@ local function farmCrate(crateObj)
     local targetPart = getPhysicalPartFromCrate(crateObj)
 
     if targetPart then
-        -- Teleport once directly to crate
-        myRoot.CFrame = targetPart.CFrame * CRATE_OFFSET
+        local startTime = tick()
+        local connection
 
-        -- Claim touch interest
-        if firetouchinterest and myRoot and targetPart then
-            pcall(function()
-                firetouchinterest(myRoot, targetPart, 0)
-                task.wait(0.02)
-                firetouchinterest(myRoot, targetPart, 1)
-            end)
+        -- Continuously lock position to moving/falling crate until it disappears or times out (10s)
+        connection = RunService.Stepped:Connect(function()
+            if crateObj and crateObj.Parent and targetPart and targetPart.Parent and (tick() - startTime < 10) then
+                if myRoot and myRoot.Parent then
+                    -- Attach directly to crate center so rolling/falling doesn't miss
+                    myRoot.CFrame = targetPart.CFrame
+                    
+                    -- Fire touch interest dynamically on motion
+                    if firetouchinterest then
+                        pcall(function()
+                            firetouchinterest(myRoot, targetPart, 0)
+                            firetouchinterest(myRoot, targetPart, 1)
+                        end)
+                    end
+                end
+            else
+                if connection then connection:Disconnect() end
+            end
+        end)
+
+        -- Wait until crate disappears or 10-second timer expires
+        while crateObj and crateObj.Parent and targetPart and targetPart.Parent and (tick() - startTime < 10) do
+            task.wait(0.05)
         end
 
-        -- Hold until crate despawns or times out (max 3 seconds)
-        local timeout = 0
-        while crateObj and crateObj.Parent and targetPart and targetPart.Parent and timeout < 30 do
-            task.wait(0.1)
-            timeout = timeout + 1
-        end
+        if connection then connection:Disconnect() end
     end
 
-    -- Return to previous position instantly
+    -- Return to original position instantly
     myRoot = character and character:FindFirstChild("HumanoidRootPart")
     if myRoot and previousCFrame then
         myRoot.CFrame = previousCFrame
     end
 
-    -- Reset farming flag immediately so Boss loop resumes
     isFarmingCrate = false
 end
 
@@ -398,7 +408,7 @@ end
 
 workspace.ChildAdded:Connect(function(child)
     if config.crateTpEnabled and isValidSpawnedCrate(child) then
-        task.wait(0.1)
+        task.wait(0.05)
         farmCrate(child)
     end
 end)
@@ -437,4 +447,4 @@ player.CharacterAdded:Connect(function(newChar)
     table.clear(processedCrates)
 end)
 
-print("[Loaded] Fixed Resume-Teleport loop.")
+print("[Loaded] Motion-Tracking Crate Collector Active.")
