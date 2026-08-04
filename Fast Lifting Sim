@@ -370,31 +370,34 @@ local function farmCrate(crateObj)
         end
     end)
 
-    -- HOLD POSITION AT CRATE UNTIL THE TIMER FINISHES (CRATE IS DESTROYED)
-    if targetPart then
-        while crateObj and crateObj.Parent and targetPart and targetPart.Parent do
-            local currentRoot = character and character:FindFirstChild("HumanoidRootPart")
-            local currentHum = character and character:FindFirstChildOfClass("Humanoid")
-            
-            if not currentRoot or not currentHum or currentHum.Health <= 0 then
-                break
-            end
-
-            -- Stick to crate & wipe falling velocity
-            currentRoot.AssemblyLinearVelocity = Vector3.zero
-            currentRoot.CFrame = targetPart.CFrame * CRATE_OFFSET
-
-            -- Send touch interaction continuously in case required by timer
-            if firetouchinterest then
-                pcall(function()
-                    firetouchinterest(currentRoot, targetPart, 0)
-                    task.wait(0.02)
-                    firetouchinterest(currentRoot, targetPart, 1)
-                end)
-            end
-
-            task.wait(0.1)
+    -- 5-SECOND TIMER HOLD AT CRATE
+    local startTime = os.clock()
+    while os.clock() - startTime < 5 do
+        local currentRoot = character and character:FindFirstChild("HumanoidRootPart")
+        local currentHum = character and character:FindFirstChildOfClass("Humanoid")
+        
+        if not currentRoot or not currentHum or currentHum.Health <= 0 then
+            break
         end
+
+        -- Keep character attached to crate if it exists, otherwise hold relative position
+        if targetPart and targetPart.Parent then
+            currentRoot.CFrame = targetPart.CFrame * CRATE_OFFSET
+        end
+
+        -- Wipe falling velocity
+        currentRoot.AssemblyLinearVelocity = Vector3.zero
+
+        -- Send touch interaction continuously during the timer
+        if targetPart and targetPart.Parent and firetouchinterest then
+            pcall(function()
+                firetouchinterest(currentRoot, targetPart, 0)
+                task.wait(0.02)
+                firetouchinterest(currentRoot, targetPart, 1)
+            end)
+        end
+
+        task.wait(0.1)
     end
 
     -- Clean up Noclip
@@ -402,9 +405,6 @@ local function farmCrate(crateObj)
         noclipConnection:Disconnect()
         noclipConnection = nil
     end
-
-    -- WAIT FOR REWARD TO PROCESS BEFORE TELEPORTING BACK
-    task.wait(0.3)
 
     -- TELEPORT BACK TO original saved position safely
     local finalRoot = character and character:FindFirstChild("HumanoidRootPart")
@@ -471,4 +471,4 @@ player.CharacterAdded:Connect(function(newChar)
     table.clear(processedCrates)
 end)
 
-print("[Loaded] Updated Offset Crate Script Active.")
+print("[Loaded] 5-Second Delay Crate Script Active.")
