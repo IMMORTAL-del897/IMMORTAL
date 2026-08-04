@@ -355,10 +355,10 @@ local function farmCrate(crateObj)
     local targetPart = getPhysicalPartFromCrate(crateObj)
 
     if targetPart then
-        -- Teleport once directly to the crate
+        -- Teleport once directly to crate
         myRoot.CFrame = targetPart.CFrame * CRATE_OFFSET
 
-        -- Trigger touch interest once
+        -- Claim touch interest
         if firetouchinterest and myRoot and targetPart then
             pcall(function()
                 firetouchinterest(myRoot, targetPart, 0)
@@ -367,32 +367,23 @@ local function farmCrate(crateObj)
             end)
         end
 
-        -- Hold position until crate despawns (No continuous teleporting)
-        while crateObj and crateObj.Parent and targetPart and targetPart.Parent do
+        -- Hold until crate despawns or times out (max 3 seconds)
+        local timeout = 0
+        while crateObj and crateObj.Parent and targetPart and targetPart.Parent and timeout < 30 do
             task.wait(0.1)
+            timeout = timeout + 1
         end
     end
 
-    -- Return to original position
+    -- Return to previous position instantly
     myRoot = character and character:FindFirstChild("HumanoidRootPart")
     if myRoot and previousCFrame then
         myRoot.CFrame = previousCFrame
     end
 
-    task.wait(0.1)
+    -- Reset farming flag immediately so Boss loop resumes
     isFarmingCrate = false
 end
-
-task.spawn(function()
-    while true do
-        for crate, _ in pairs(processedCrates) do
-            if not crate or not crate.Parent then
-                processedCrates[crate] = nil
-            end
-        end
-        task.wait(3)
-    end
-end)
 
 local function findAvailableCrate()
     for _, obj in ipairs(workspace:GetChildren()) do
@@ -417,11 +408,15 @@ task.spawn(function()
     while true do
         if character and character.Parent then
             local myRoot = character:FindFirstChild("HumanoidRootPart")
-            local crateToFarm = config.crateTpEnabled and findAvailableCrate() or nil
 
-            if crateToFarm then
-                farmCrate(crateToFarm)
-            elseif config.autoTpEnabled and not isFarmingCrate then
+            if config.crateTpEnabled and not isFarmingCrate then
+                local crateToFarm = findAvailableCrate()
+                if crateToFarm then
+                    farmCrate(crateToFarm)
+                end
+            end
+
+            if config.autoTpEnabled and not isFarmingCrate then
                 local targetPart = findAliveBossTarget()
                 if targetPart and myRoot then
                     myRoot.CFrame = targetPart.CFrame * SAFE_OFFSET
@@ -430,8 +425,6 @@ task.spawn(function()
                         executeAutoAttack()
                     end
                 end
-            else
-                currentTargetPart = nil
             end
         end
         task.wait(loopDelay)
@@ -444,4 +437,4 @@ player.CharacterAdded:Connect(function(newChar)
     table.clear(processedCrates)
 end)
 
-print("[Loaded] Single-Teleport Crate Collector active.")
+print("[Loaded] Fixed Resume-Teleport loop.")
